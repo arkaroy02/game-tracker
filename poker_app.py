@@ -2,14 +2,19 @@ import streamlit as st
 
 st.set_page_config(page_title="Poker Tracker", layout="wide")
 
+DEFAULT_BUYIN = 5000
+
 # -----------------------------
-# Initialize session state
+# Session State
 # -----------------------------
 if "players" not in st.session_state:
     st.session_state.players = {}
 
 if "initial" not in st.session_state:
     st.session_state.initial = {}
+
+if "total_buyin" not in st.session_state:
+    st.session_state.total_buyin = {}
 
 if "history" not in st.session_state:
     st.session_state.history = []
@@ -23,146 +28,143 @@ if "game_started" not in st.session_state:
 st.title("🃏 Poker Tracker")
 
 # -----------------------------
-# Sidebar (History)
+# Sidebar History
 # -----------------------------
-st.sidebar.title("📜 Game History")
+st.sidebar.title("📜 History")
 
-if st.session_state.history:
-    for i, h in enumerate(reversed(st.session_state.history), 1):
-
-        winners_text = ", ".join(h["winners"])
-
-        st.sidebar.markdown(
-            f"""
-            <div style="background-color:#111;padding:10px;border-radius:8px;margin-bottom:8px">
-            <b>Round {len(st.session_state.history)-i+1}</b><br>
-            🏆 <span style="color:#00ff88">{winners_text}</span><br>
-            💰 Pot: ₹{h['pot']:.2f}<br>
-            🤝 Share: ₹{h['share']:.2f}
-            </div>
-            """,
-            unsafe_allow_html=True
-        )
-else:
-    st.sidebar.info("No rounds played yet")
+for h in reversed(st.session_state.history):
+    winners = ", ".join(h["winners"])
+    st.sidebar.write(f"🏆 {winners} | ₹{h['pot']}")
 
 # -----------------------------
 # Add Players
 # -----------------------------
 st.subheader("➕ Add Player")
 
-with st.form("add_player_form", clear_on_submit=True):
+with st.form("add_player", clear_on_submit=True):
     col1, col2 = st.columns(2)
+
     name = col1.text_input("Name")
+
     balance = col2.number_input(
         "Initial Balance",
-        min_value=0.0,
-        value=5000.0,
-        step=100.0
+        min_value=0,
+        value=DEFAULT_BUYIN,
+        step=100
     )
 
-    submitted = st.form_submit_button("Add Player")
-
-    if submitted:
+    if st.form_submit_button("Add"):
         if name:
             if name in st.session_state.players:
-                st.warning("Player already exists!")
+                st.warning("Player exists")
             else:
                 st.session_state.players[name] = balance
                 st.session_state.initial[name] = balance
-                st.success(f"{name} added!")
+                st.session_state.total_buyin[name] = balance
 
 # -----------------------------
-# Show Players
+# Balances + Rebuy
 # -----------------------------
 st.subheader("💰 Balances")
 
-if st.session_state.players:
+players = list(st.session_state.players.keys())
 
-    players = list(st.session_state.players.keys())
+for p in players:
 
-    st.write("### 📊 Player Table")
+    bal = st.session_state.players[p]
+    total = st.session_state.total_buyin[p]
 
-    cols = st.columns(3)
-    cols[0].markdown("**Player**")
-    cols[1].markdown("**Balance**")
-    cols[2].markdown("**Net Worth**")
+    net = bal - total
 
-    for p in players:
-        c1, c2, c3 = st.columns(3)
+    color = "green" if net >= 0 else "red"
 
-        c1.write(p)
+    st.markdown(
+        f"**{p}** | Balance: ₹{bal} | Total Buyin: ₹{total} | Net: :{color}[₹{net}]"
+    )
 
-        # Editable only before game starts
-        if not st.session_state.game_started:
-            new_initial = c2.number_input(
-                "",
-                value=st.session_state.initial[p],
-                key=f"init_{p}"
-            )
-            st.session_state.initial[p] = new_initial
-            st.session_state.players[p] = new_initial
-        else:
-            c2.write(f"₹{st.session_state.players[p]:.2f}")
-
-        # Net worth
-        net = st.session_state.players[p] - st.session_state.initial[p]
-        color = "#00ff88" if net >= 0 else "#ff4b4b"
-
-        c3.markdown(
-            f"<span style='color:{color}'>₹{net:.2f}</span>",
-            unsafe_allow_html=True
-        )
-
+    # Edit initial before game starts
     if not st.session_state.game_started:
-        st.info("You can edit initial balances before first round")
+        new_val = st.number_input(
+            f"Edit {p}",
+            value=st.session_state.initial[p],
+            key=f"init_{p}"
+        )
+        st.session_state.initial[p] = new_val
+        st.session_state.players[p] = new_val
+        st.session_state.total_buyin[p] = new_val
 
-else:
-    st.info("No players added yet")
+    # 🔥 REBUY (CUSTOM)
+    if bal <= 0:
+        st.write(f"Rebuy for {p}")
+
+        col1, col2 = st.columns([2,1])
+
+        with col1:
+            rebuy_amt = st.number_input(
+                f"Amount {p}",
+                min_value=0,
+                step=100,
+                key=f"rebuy_{p}"
+            )
+
+        with col2:
+            if st.button("Rebuy", key=f"btn_{p}"):
+                if rebuy_amt > 0:
+                    st.session_state.players[p] += rebuy_amt
+                    st.session_state.total_buyin[p] += rebuy_amt
+                    st.rerun()
 
 # -----------------------------
-# Round Section (MULTI WINNER)
+# Round Section
 # -----------------------------
-if st.session_state.players:
+if players:
 
-    st.subheader("🎲 Play Round")
+    st.subheader("🎲 Round")
 
-    players = list(st.session_state.players.keys())
-
-    winners = st.multiselect("Select Winner(s)", players)
-
-    st.write("### 💸 Enter Contributions")
+    winners = st.multiselect("Winner(s)", players)
 
     contributions = {}
-    total_pot = 0
+    pot = 0
 
-    cols = st.columns(len(players))
+    # Handle ALL-IN trigger
+    for p in players:
+        if st.session_state.get(f"allin_{p}", False):
+            st.session_state[f"bet_{p}"] = st.session_state.players[p]
+            st.session_state[f"allin_{p}"] = False
 
-    for i, p in enumerate(players):
-        with cols[i]:
+    for p in players:
+
+        col1, col2 = st.columns([3,1])
+
+        with col1:
             amt = st.number_input(
                 p,
-                min_value=0.0,
-                step=50.0,
+                min_value=0,
+                max_value=st.session_state.players[p],
+                step=100,
                 key=f"bet_{p}",
-                value=0.0
+                value=st.session_state.get(f"bet_{p}", 0)
             )
-            contributions[p] = amt
-            total_pot += amt
 
-    st.markdown(f"### 💰 Pot: ₹{total_pot:.2f}")
+        with col2:
+            if st.button("ALL-IN", key=f"a_{p}"):
+                st.session_state[f"allin_{p}"] = True
+                st.rerun()
+
+        contributions[p] = amt
+        pot += amt
+
+    st.write(f"💰 Pot: ₹{pot}")
 
     # -----------------------------
     # Play Round
     # -----------------------------
-    if st.button("▶ Play Round"):
+    if st.button("▶ Play"):
 
-        # ❗ Must select at least one winner
-        if len(winners) == 0:
-            st.warning("Please select at least one winner!")
+        if not winners:
+            st.warning("Select winner")
             st.stop()
 
-        # Lock game
         st.session_state.game_started = True
 
         # Deduct contributions
@@ -170,7 +172,7 @@ if st.session_state.players:
             st.session_state.players[p] -= contributions[p]
 
         # Split pot
-        share = total_pot / len(winners)
+        share = pot // len(winners)
 
         for w in winners:
             st.session_state.players[w] += share
@@ -178,18 +180,10 @@ if st.session_state.players:
         # Save history
         st.session_state.history.append({
             "winners": winners,
-            "pot": total_pot,
-            "share": share,
-            "contributions": contributions.copy()
+            "pot": pot
         })
 
-        # Success message
-        if len(winners) == 1:
-            st.success(f"🏆 {winners[0]} wins ₹{total_pot:.2f}!")
-        else:
-            st.success(f"🤝 Split pot! Each gets ₹{share:.2f}")
-
-        # Reset inputs
+        # Reset bets
         for p in players:
             st.session_state.pop(f"bet_{p}", None)
 
@@ -199,4 +193,4 @@ if st.session_state.players:
 # Footer
 # -----------------------------
 st.markdown("---")
-st.caption("Poker Tracker • Multi-Winner Enabled 🤝")
+st.caption("Poker Tracker • Correct Accounting System ♠️")
