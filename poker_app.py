@@ -29,12 +29,16 @@ st.sidebar.title("📜 Game History")
 
 if st.session_state.history:
     for i, h in enumerate(reversed(st.session_state.history), 1):
+
+        winners_text = ", ".join(h["winners"])
+
         st.sidebar.markdown(
             f"""
             <div style="background-color:#111;padding:10px;border-radius:8px;margin-bottom:8px">
             <b>Round {len(st.session_state.history)-i+1}</b><br>
-            🏆 <span style="color:#00ff88">{h['winner']}</span><br>
-            💰 Pot: ₹{h['pot']:.2f}
+            🏆 <span style="color:#00ff88">{winners_text}</span><br>
+            💰 Pot: ₹{h['pot']:.2f}<br>
+            🤝 Share: ₹{h['share']:.2f}
             </div>
             """,
             unsafe_allow_html=True
@@ -89,7 +93,7 @@ if st.session_state.players:
 
         c1.write(p)
 
-        # 🔥 Editable ONLY before game starts
+        # Editable only before game starts
         if not st.session_state.game_started:
             new_initial = c2.number_input(
                 "",
@@ -117,7 +121,7 @@ else:
     st.info("No players added yet")
 
 # -----------------------------
-# Round Section
+# Round Section (MULTI WINNER)
 # -----------------------------
 if st.session_state.players:
 
@@ -125,7 +129,7 @@ if st.session_state.players:
 
     players = list(st.session_state.players.keys())
 
-    winner = st.selectbox("Select Winner", players)
+    winners = st.multiselect("Select Winner(s)", players)
 
     st.write("### 💸 Enter Contributions")
 
@@ -153,24 +157,37 @@ if st.session_state.players:
     # -----------------------------
     if st.button("▶ Play Round"):
 
-        # 🔥 Lock game after first round
+        # ❗ Must select at least one winner
+        if len(winners) == 0:
+            st.warning("Please select at least one winner!")
+            st.stop()
+
+        # Lock game
         st.session_state.game_started = True
 
-        # Deduct from all
+        # Deduct contributions
         for p in players:
             st.session_state.players[p] -= contributions[p]
 
-        # Add to winner
-        st.session_state.players[winner] += total_pot
+        # Split pot
+        share = total_pot / len(winners)
+
+        for w in winners:
+            st.session_state.players[w] += share
 
         # Save history
         st.session_state.history.append({
-            "winner": winner,
+            "winners": winners,
             "pot": total_pot,
+            "share": share,
             "contributions": contributions.copy()
         })
 
-        st.success(f"🏆 {winner} wins ₹{total_pot:.2f}!")
+        # Success message
+        if len(winners) == 1:
+            st.success(f"🏆 {winners[0]} wins ₹{total_pot:.2f}!")
+        else:
+            st.success(f"🤝 Split pot! Each gets ₹{share:.2f}")
 
         # Reset inputs
         for p in players:
@@ -182,4 +199,4 @@ if st.session_state.players:
 # Footer
 # -----------------------------
 st.markdown("---")
-st.caption("Poker Tracker • Initial Edit Lock Enabled 🔒")
+st.caption("Poker Tracker • Multi-Winner Enabled 🤝")
