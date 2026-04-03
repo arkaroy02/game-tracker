@@ -1,26 +1,49 @@
 import streamlit as st
+import pandas as pd
+import base64
 
 st.set_page_config(page_title="Poker Tracker", layout="wide")
 
 DEFAULT_BUYIN = 5000
 
 # -----------------------------
-# Session State
+# 🎨 Poker Table Background
 # -----------------------------
-if "players" not in st.session_state:
-    st.session_state.players = {}
+st.markdown("""
+<style>
+.stApp {
+    background: radial-gradient(circle at center, #0f5132, #022c22);
+    color: white;
+}
+.block-container {
+    padding-top: 2rem;
+}
+.card {
+    background-color: #111;
+    padding: 12px;
+    border-radius: 12px;
+    margin-bottom: 10px;
+}
+</style>
+""", unsafe_allow_html=True)
 
-if "initial" not in st.session_state:
-    st.session_state.initial = {}
-
-if "total_buyin" not in st.session_state:
-    st.session_state.total_buyin = {}
-
-if "history" not in st.session_state:
-    st.session_state.history = []
-
-if "game_started" not in st.session_state:
-    st.session_state.game_started = False
+# -----------------------------
+# Session State Init
+# -----------------------------
+for key, default in {
+    "players": {},
+    "initial": {},
+    "total_buyin": {},
+    "history": [],
+    "matches": [],
+    "game_started": False,
+    "reset_bets": False,
+    "buyin_confirmed": False,
+    "reset_winners": False,
+    "allin_trigger": {}
+}.items():
+    if key not in st.session_state:
+        st.session_state[key] = default
 
 # -----------------------------
 # Title
@@ -28,84 +51,82 @@ if "game_started" not in st.session_state:
 st.title("🃏 Poker Tracker")
 
 # -----------------------------
-# Sidebar History
+# Sidebar Match Table
 # -----------------------------
-st.sidebar.title("📜 History")
+st.sidebar.title("📊 Saved Matches")
 
-for h in reversed(st.session_state.history):
-    winners = ", ".join(h["winners"])
-    st.sidebar.write(f"🏆 {winners} | ₹{h['pot']}")
+if st.session_state.matches:
+    rows = []
+    for i, m in enumerate(st.session_state.matches, 1):
+        for p, bal in m["players"].items():
+            rows.append({
+                "Match": i,
+                "Player": p,
+                "Final Balance": bal
+            })
+
+    df = pd.DataFrame(rows)
+    st.sidebar.dataframe(df, use_container_width=True)
+else:
+    st.sidebar.info("No matches saved")
 
 # -----------------------------
 # Add Players
 # -----------------------------
-st.subheader("➕ Add Player")
+if not st.session_state.buyin_confirmed:
 
-with st.form("add_player", clear_on_submit=True):
-    col1, col2 = st.columns(2)
+    st.subheader("➕ Add Player")
 
-    name = col1.text_input("Name")
+    with st.form("add_player", clear_on_submit=True):
+        col1, col2 = st.columns(2)
 
-    balance = col2.number_input(
-        "Initial Balance",
-        min_value=0,
-        value=DEFAULT_BUYIN,
-        step=100
-    )
+        name = col1.text_input("Name")
+        balance = col2.number_input("Initial Balance", min_value=0, value=DEFAULT_BUYIN, step=100)
 
-    if st.form_submit_button("Add"):
-        if name:
-            if name in st.session_state.players:
-                st.warning("Player exists")
-            else:
+        if st.form_submit_button("Add"):
+            if name and name not in st.session_state.players:
                 st.session_state.players[name] = balance
                 st.session_state.initial[name] = balance
                 st.session_state.total_buyin[name] = balance
 
 # -----------------------------
-# Balances + Rebuy
+# Confirm Buy-in
+# -----------------------------
+if st.session_state.players and not st.session_state.buyin_confirmed:
+    if st.button("✅ Confirm Buy-ins"):
+        st.session_state.buyin_confirmed = True
+        st.success("Buy-ins locked!")
+
+# -----------------------------
+# Balances
 # -----------------------------
 st.subheader("💰 Balances")
 
 players = list(st.session_state.players.keys())
 
 for p in players:
-
     bal = st.session_state.players[p]
     total = st.session_state.total_buyin[p]
-
     net = bal - total
 
-    color = "green" if net >= 0 else "red"
+    color = "lightgreen" if net >= 0 else "salmon"
 
     st.markdown(
-        f"**{p}** | Balance: ₹{bal} | Total Buyin: ₹{total} | Net: :{color}[₹{net}]"
+        f"<div class='card'><b>{p}</b><br>₹{bal} | Net: <span style='color:{color}'>₹{net}</span></div>",
+        unsafe_allow_html=True
     )
 
-    # Edit initial before game starts
-    if not st.session_state.game_started:
-        new_val = st.number_input(
-            f"Edit {p}",
-            value=st.session_state.initial[p],
-            key=f"init_{p}"
-        )
-        st.session_state.initial[p] = new_val
+    if not st.session_state.buyin_confirmed:
+        new_val = st.number_input(f"Edit {p}", value=st.session_state.initial[p], key=f"init_{p}")
         st.session_state.players[p] = new_val
+        st.session_state.initial[p] = new_val
         st.session_state.total_buyin[p] = new_val
 
-    # 🔥 REBUY (CUSTOM)
     if bal <= 0:
-        st.write(f"Rebuy for {p}")
-
         col1, col2 = st.columns([2,1])
 
         with col1:
-            rebuy_amt = st.number_input(
-                f"Amount {p}",
-                min_value=0,
-                step=100,
-                key=f"rebuy_{p}"
-            )
+            rebuy_amt = st.number_input(f"Rebuy {p}", min_value=0, step=100, key=f"rebuy_{p}")
 
         with col2:
             if st.button("Rebuy", key=f"btn_{p}"):
@@ -117,23 +138,33 @@ for p in players:
 # -----------------------------
 # Round Section
 # -----------------------------
-if players:
+if players and st.session_state.buyin_confirmed:
 
     st.subheader("🎲 Round")
 
-    winners = st.multiselect("Winner(s)", players)
+    # Reset winners BEFORE render
+    if st.session_state.reset_winners:
+        st.session_state["winners"] = []
+        st.session_state.reset_winners = False
+
+    winners = st.multiselect("Winner(s)", players, key="winners")
 
     contributions = {}
     pot = 0
 
-    # Handle ALL-IN trigger
+    # Reset bets BEFORE render
+    if st.session_state.reset_bets:
+        for p in players:
+            st.session_state[f"bet_{p}"] = 0
+        st.session_state.reset_bets = False
+
+    # ✅ APPLY ALL-IN BEFORE widgets render (FIXED)
     for p in players:
-        if st.session_state.get(f"allin_{p}", False):
+        if st.session_state.allin_trigger.get(p, False):
             st.session_state[f"bet_{p}"] = st.session_state.players[p]
-            st.session_state[f"allin_{p}"] = False
+            st.session_state.allin_trigger[p] = False
 
     for p in players:
-
         col1, col2 = st.columns([3,1])
 
         with col1:
@@ -147,50 +178,88 @@ if players:
             )
 
         with col2:
+            # ✅ FIXED ALL-IN BUTTON
             if st.button("ALL-IN", key=f"a_{p}"):
-                st.session_state[f"allin_{p}"] = True
+                st.session_state.allin_trigger[p] = True
                 st.rerun()
 
         contributions[p] = amt
         pot += amt
 
-    st.write(f"💰 Pot: ₹{pot}")
+    st.markdown(f"### 💰 Pot: ₹{pot}")
 
-    # -----------------------------
-    # Play Round
-    # -----------------------------
     if st.button("▶ Play"):
 
         if not winners:
             st.warning("Select winner")
             st.stop()
 
-        st.session_state.game_started = True
-
-        # Deduct contributions
         for p in players:
             st.session_state.players[p] -= contributions[p]
 
-        # Split pot
         share = pot // len(winners)
 
         for w in winners:
             st.session_state.players[w] += share
 
-        # Save history
-        st.session_state.history.append({
-            "winners": winners,
-            "pot": pot
-        })
+            # ✅ FIX: SAVE ROUND HISTORY
+            st.session_state.history.append({
+                "winners": winners.copy(),
+                "pot": pot
+            })
 
-        # Reset bets
-        for p in players:
-            st.session_state.pop(f"bet_{p}", None)
+        st.session_state.reset_bets = True
+        st.session_state.reset_winners = True
 
         st.rerun()
+        
+        
+# -----------------------------
+# 📜 Current Match History (Sidebar)
+# -----------------------------
+st.sidebar.markdown("---")
+st.sidebar.title("🎲 Current Match")
+
+if st.session_state.history:
+
+    rows = []
+    for i, h in enumerate(reversed(st.session_state.history), 1):
+        rows.append({
+            "Round": len(st.session_state.history) - i + 1,
+            "Winners": ", ".join(h["winners"]),
+            "Pot": h["pot"]
+        })
+
+    df_hist = pd.DataFrame(rows)
+    st.sidebar.dataframe(df_hist, use_container_width=True)
+
+else:
+    st.sidebar.info("No rounds yet")
+    
+    
+# -----------------------------
+# End Match
+# -----------------------------
+st.markdown("### 🏁 End Match")
+
+if st.button("End Match"):
+
+    st.session_state.matches.append({
+        "players": st.session_state.players.copy()
+    })
+
+    st.session_state.players = {}
+    st.session_state.initial = {}
+    st.session_state.total_buyin = {}
+    st.session_state.history = []
+    st.session_state.game_started = False
+    st.session_state.buyin_confirmed = False
+
+    st.success("Match saved!")
+    st.rerun()
 
 # -----------------------------
 # Footer
 # -----------------------------
 st.markdown("---")
-st.caption("Poker Tracker • Correct Accounting System ♠️")
+st.caption("Poker Tracker ~ Arka ♠️🟢")
